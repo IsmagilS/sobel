@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 
 struct Pixel {
 	unsigned int red, green, blue;
@@ -239,27 +240,81 @@ void writeImage(const char* filename, struct Image *image) {
 	close(fd);
 }
 
-void convertToWB(struct Image **image) {
+struct Image* convertToWB(struct Image *image) {
 	if (!image)
-		return;
+		return NULL;
 
-	int i, j;
-	for (i = 0; i < (*image)->height; ++i) {
-		for (j = 0; j < (*image)->width; ++j) {
-			int red = (*image)->matrix[i][j].red;
-			int green = (*image)->matrix[i][j].green;
-			int blue = (*image)->matrix[i][j].blue;
+	struct Image *result = (struct Image*)malloc(sizeof(struct Image));
+	result->height = image->height;
+	result->width = image->width;
+	result->max_value = image->max_value;
+	result->matrix = (struct Pixel**)malloc(result->height * sizeof(struct Pixel*));
+	int i;
+	for (i = 0; i < image->height; ++i)
+		result->matrix[i] = (struct Pixel*)malloc(result->width * sizeof(struct Pixel));
+
+	int j;
+	for (i = 0; i < image->height; ++i) {
+		for (j = 0; j < image->width; ++j) {
+			int red = image->matrix[i][j].red;
+			int green = image->matrix[i][j].green;
+			int blue = image->matrix[i][j].blue;
 			int grey = (299 * red + 587 * green + 114 * blue) / 1000;
-			(*image)->matrix[i][j].red = (*image)->matrix[i][j].green = (*image)->matrix[i][j].blue = grey;
+			result->matrix[i][j].red = result->matrix[i][j].green = result->matrix[i][j].blue = grey;
 		}
 	}
 
-	return;
+	return result;
+}
+
+
+
+struct Image* applySobel(struct Image *image) {
+	if (!image || image->height <= 2 || image->width <= 2)
+		return NULL;
+	image = convertToWB(image);
+
+	struct Image *result = (struct Image*)malloc(sizeof(struct Image));
+	result->height = image->height - 2;
+	result->width = image->width - 2;
+	result->max_value = image->max_value;
+	result->matrix = (struct Pixel**)malloc(result->height * sizeof(struct Pixel*));
+	int i;
+	for (i = 0; i < image->height; ++i)
+		result->matrix[i] = (struct Pixel*)malloc(result->width * sizeof(struct Pixel));
+
+	int j;
+	for (i = 1; i < image->height - 1; ++i) {
+		for (j = 1; j < image->width - 1; ++j) {
+			int gx = image->matrix[i - 1][j - 1].red + 
+				2 * image->matrix[i][j - 1].red + 
+				image->matrix[i + 1][j - 1].red -
+                image->matrix[i - 1][j + 1].red -
+                2 * image->matrix[i][j + 1].red -
+                image->matrix[i + 1][j + 1].red;
+
+            int gy = image->matrix[i - 1][j - 1].red + 
+				2 * image->matrix[i - 1][j].red + 
+				image->matrix[i - 1][j + 1].red -
+                image->matrix[i + 1][j - 1].red -
+                2 * image->matrix[i + 1][j].red -
+                image->matrix[i + 1][j + 1].red;
+
+            int sum = abs(gx) + abs(gy);
+
+            sum = sum < 0 ? 0 : sum;
+            sum = sum > image->max_value ? image->max_value : sum;
+
+            result->matrix[i - 1][j - 1].red = result->matrix[i - 1][j - 1].green = result->matrix[i - 1][j - 1].blue = sum;
+		}
+	}
+
+	return result;
 }
 
 int main(int argc, char *argv[]) {
 	struct Image *image = readImage(argv[1]);
-	convertToWB(&image);
+	image = applySobel(image);
 	writeImage(argv[2], image);
 	return 0;
 }
