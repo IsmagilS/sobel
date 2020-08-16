@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <math.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <time.h>
 
 struct Pixel {
 	unsigned int red, green, blue;
@@ -15,6 +18,14 @@ struct Image {
 	unsigned int height, width, max_value;
 	struct Pixel **matrix;
 };
+
+struct ThreadArgument
+{
+	struct Image *image, **result;
+	unsigned int from, to;
+};
+
+int threads_finished = 0;
 
 int readInt(const unsigned char *c, int *cur_pos, const int max_len) {
 	if (*cur_pos == max_len)
@@ -38,12 +49,10 @@ int readInt(const unsigned char *c, int *cur_pos, const int max_len) {
 			result = result * 10 + ch - '0';
 			++*cur_pos;
 		} else if (seen_digit) {
-			printf("%d\n", result);
 			return result;
 		} else if (ch == ' ' || ch == '\t')
 			++*cur_pos;
 		else {
-			printf("kek %d %c %d %d\n", *cur_pos, ch, skip_until_new_line, seen_digit);
 			return 0;
 		}
 	}
@@ -75,7 +84,6 @@ struct Image *readImage(const char *filename) {
 	}
 
 	unsigned char *buff = (unsigned char*) malloc(fileStat.st_size + 1);
-	printf("Bytes read=%d\n", fileStat.st_size);
 
 	int i;
 	for (i = 0; i < fileStat.st_size + 1; ++i)
@@ -92,22 +100,21 @@ struct Image *readImage(const char *filename) {
 	}
 
 	int it = 3;
+
+	int width = readInt(buff, &it, fileStat.st_size + 1);
+	if (width == 0) {
+		perror("Image size is incorrect\n");
+		exit(1);
+	}
+
 	int height = readInt(buff, &it, fileStat.st_size + 1);
-	printf("kek\n");
 	if (height == 0) {
-		printf("%d\n", it);
 		perror("Image size is incorrect\n");
 		exit(1);
 	}
 
 	if (buff[it] != '\n' && buff[it] != '#' && buff[it] != ' ' && buff[it] != '\t') {
 		perror("Error while reading image size\n");
-		exit(1);
-	}
-
-	int width = readInt(buff, &it, fileStat.st_size + 1);
-	if (width == 0) {
-		perror("Image size is incorrect\n");
 		exit(1);
 	}
 
@@ -162,12 +169,18 @@ struct Image *readImage(const char *filename) {
 			if (pixel / width == height)
 				break;
 
-			if (cnt % 6 < 2)
-				image->matrix[pixel / width][pixel % width].red = buff[it];
-			else if (cnt % 6 < 4) 
-				image->matrix[pixel / width][pixel % width].green = buff[it];
-			else 
-				image->matrix[pixel / width][pixel % width].blue = buff[it];
+			if (cnt % 6 < 2) {
+				image->matrix[pixel / width][pixel % width].red *= 256;
+				image->matrix[pixel / width][pixel % width].red += buff[it];
+			}
+			else if (cnt % 6 < 4) {
+				image->matrix[pixel / width][pixel % width].green *= 256;
+				image->matrix[pixel / width][pixel % width].green += buff[it];
+			}
+			else {
+				image->matrix[pixel / width][pixel % width].blue *= 256;
+				image->matrix[pixel / width][pixel % width].blue += buff[it];
+			}
 		}
 
 		++it;
@@ -208,9 +221,9 @@ void writeImage(const char* filename, struct Image *image) {
 
 	write(fd, format, sizeof(format));
 	write(fd, cc, sizeof(cc));
-	printInteger(fd, image->height);
-	write(fd, cc, sizeof(cc));
 	printInteger(fd, image->width);
+	write(fd, cc, sizeof(cc));
+	printInteger(fd, image->height);
 	write(fd, cc, sizeof(cc));
 	printInteger(fd, image->max_value);
 	write(fd, cc, sizeof(cc));
@@ -259,21 +272,21 @@ struct Image* convertToWB(struct Image *image) {
 			int red = image->matrix[i][j].red;
 			int green = image->matrix[i][j].green;
 			int blue = image->matrix[i][j].blue;
-			int grey = (299 * red + 587 * green + 114 * blue) / 1000;
-			result->matrix[i][j].red = result->matrix[i][j].green = result->matrix[i][j].blue = grey;
+			int gr = (299 * red + 587 * green + 114 * blue) / 1000;
+			result->matrix[i][j].red = result->matrix[i][j].green = result->matrix[i][j].blue = gr;
 		}
 	}
 
 	return result;
 }
 
+void *applySobelOnThread(void *);
 
-
-struct Image* applySobel(struct Image *image) {
-	if (!image || image->height <= 2 || image->width <= 2)
+struct Image *applySobel(struct Image *image, int threads) {
+	if (!image || !threads) 
 		return NULL;
-	image = convertToWB(image);
 
+	image = convertToWB(image);
 	struct Image *result = (struct Image*)malloc(sizeof(struct Image));
 	result->height = image->height - 2;
 	result->width = image->width - 2;
@@ -283,38 +296,97 @@ struct Image* applySobel(struct Image *image) {
 	for (i = 0; i < image->height; ++i)
 		result->matrix[i] = (struct Pixel*)malloc(result->width * sizeof(struct Pixel));
 
-	int j;
-	for (i = 1; i < image->height - 1; ++i) {
-		for (j = 1; j < image->width - 1; ++j) {
-			int gx = image->matrix[i - 1][j - 1].red + 
-				2 * image->matrix[i][j - 1].red + 
-				image->matrix[i + 1][j - 1].red -
-                image->matrix[i - 1][j + 1].red -
-                2 * image->matrix[i][j + 1].red -
-                image->matrix[i + 1][j + 1].red;
+	unsigned int pixels = result->height * result->width;
+	threads = threads <	pixels ? threads : pixels;
 
-            int gy = image->matrix[i - 1][j - 1].red + 
-				2 * image->matrix[i - 1][j].red + 
-				image->matrix[i - 1][j + 1].red -
-                image->matrix[i + 1][j - 1].red -
-                2 * image->matrix[i + 1][j].red -
-                image->matrix[i + 1][j + 1].red;
+	struct ThreadArgument args[threads];
+	pthread_t thr[threads];
+	for (i = 0; i < threads; ++i) {
+		args[i].from = pixels / threads * i;
+		args[i].to = pixels / threads * (i + 1);
+		args[i].image = image;
+		args[i].result = &result;
 
-            int sum = abs(gx) + abs(gy);
+	   if (pthread_create(&thr[i], NULL , applySobelOnThread, (void *)&args[i])) {
+	   		perror("Could not create thread\n");
+	   		exit(1);
+	   }
+	}
 
-            sum = sum < 0 ? 0 : sum;
-            sum = sum > image->max_value ? image->max_value : sum;
-
-            result->matrix[i - 1][j - 1].red = result->matrix[i - 1][j - 1].green = result->matrix[i - 1][j - 1].blue = sum;
+	for (i = 0; i < threads; ++i) {
+		if (pthread_join(thr[i], NULL)) {
+			perror("Error while running in thread\n");
+			exit(1);
 		}
 	}
 
+	int j;
+	unsigned int max_value = 0;
+	for (i = 0; i < result->height; ++i) {
+		for (j = 0; j < result->width; ++j) {
+			if (max_value < result->matrix[i][j].red)
+				max_value = result->matrix[i][j].red;
+		}
+	}
+
+	result->max_value = max_value;
 	return result;
 }
 
+void *applySobelOnThread(void *threadArg) {
+	struct ThreadArgument *arg;
+	arg = (struct ThreadArgument *)threadArg;
+
+	if (!arg->image || arg->image->height <= 2 || arg->image->width <= 2) {
+		++threads_finished;
+		pthread_exit(NULL);
+	}
+
+	int it;
+	for (it = arg->from; it < arg->to; ++it) {
+		int i = it / (*arg->result)->width;
+		int j = it % (*arg->result)->width;
+		if (i == (*arg->result)->height)
+			break;
+
+		int gx = -arg->image->matrix[i][j].red -
+			2 * arg->image->matrix[i + 1][j].red - 
+			arg->image->matrix[i + 2][j].red +
+			arg->image->matrix[i][j + 2].red  + 
+			2 * arg->image->matrix[i + 1][j + 2].red  + 
+			arg->image->matrix[i + 2][j + 2].red;
+
+		int gy = -arg->image->matrix[i][j].red - 
+			2 * arg->image->matrix[i][j + 1].red - 
+			arg->image->matrix[i][j + 2].red + 
+			arg->image->matrix[i + 2][j].red + 
+			2 * arg->image->matrix[i + 2][j + 1].red + 
+			arg->image->matrix[i + 2][j + 2].red;
+        int sum = sqrt(gx * gx + gy * gy);
+
+        (*arg->result)->matrix[i][j].red = (*arg->result)->matrix[i][j].green = (*arg->result)->matrix[i][j].blue = sum;
+	}
+
+	++threads_finished;
+	pthread_exit(NULL);
+}
+
 int main(int argc, char *argv[]) {
+	if (argc != 4) {
+		perror("Wrong arguments count\n");
+		exit(1);
+	}
+
+	if (!atoi(argv[3])) {
+		perror("Wrong number of threads\n");
+		exit(1);
+	}
+
 	struct Image *image = readImage(argv[1]);
-	image = applySobel(image);
+	clock_t  start = clock();
+	image = applySobel(image, atoi(argv[3]));
+	clock_t finish = clock();
+	printf("Time spent to aaply Sobel operator using %d thread(s) is %f seconds\n", atoi(argv[3]), (double)(finish - start) / CLOCKS_PER_SEC);
 	writeImage(argv[2], image);
 	return 0;
 }
