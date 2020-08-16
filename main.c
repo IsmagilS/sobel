@@ -25,8 +25,6 @@ struct ThreadArgument
 	unsigned int from, to;
 };
 
-int threads_finished = 0;
-
 int readInt(const unsigned char *c, int *cur_pos, const int max_len) {
 	if (*cur_pos == max_len)
 		return 0;
@@ -338,7 +336,6 @@ void *applySobelOnThread(void *threadArg) {
 	arg = (struct ThreadArgument *)threadArg;
 
 	if (!arg->image || arg->image->height <= 2 || arg->image->width <= 2) {
-		++threads_finished;
 		pthread_exit(NULL);
 	}
 
@@ -367,7 +364,6 @@ void *applySobelOnThread(void *threadArg) {
         (*arg->result)->matrix[i][j].red = (*arg->result)->matrix[i][j].green = (*arg->result)->matrix[i][j].blue = sum;
 	}
 
-	++threads_finished;
 	pthread_exit(NULL);
 }
 
