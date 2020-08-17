@@ -35,21 +35,21 @@ int readInt(const unsigned char *c, int *cur_pos, const int max_len) {
 		unsigned char ch = c[*cur_pos];
 
 		if (ch == '\n' && !seen_digit) {
-			++*cur_pos;
+			++(*cur_pos);
 			skip_until_new_line = 0;
 		} else if (skip_until_new_line) {
-			++*cur_pos;
+			++(*cur_pos);
 		} else if (ch == '#' && !seen_digit) {
-			++*cur_pos;
+			++(*cur_pos);
 			skip_until_new_line = 1;
 		} else if (ch >= '0' && ch <= '9') {
 			seen_digit = 1;
 			result = result * 10 + ch - '0';
-			++*cur_pos;
+			++(*cur_pos);
 		} else if (seen_digit) {
 			return result;
 		} else if (ch == ' ' || ch == '\t')
-			++*cur_pos;
+			++(*cur_pos);
 		else {
 			return 0;
 		}
@@ -78,6 +78,7 @@ struct Image *readImage(const char *filename) {
 
 	if (!read(fd, signed_buff, fileStat.st_size + 1)) {
 		perror("Error while reading file\n");
+		free(signed_buff);
 		exit(1);
 	}
 
@@ -89,11 +90,15 @@ struct Image *readImage(const char *filename) {
 
 	if (fileStat.st_size < 4) {
 		perror("Incorrect file format\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);
 	}
 
 	if (buff[0] != 'P' || buff[1] != '6' || (buff[2] != ' ' && buff[2] != '\n' && buff[2] != '\t')) {
 		perror("Image format must be \"P6\"\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);
 	}
 
@@ -102,33 +107,45 @@ struct Image *readImage(const char *filename) {
 	int width = readInt(buff, &it, fileStat.st_size + 1);
 	if (width == 0) {
 		perror("Image size is incorrect\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);
 	}
 
 	int height = readInt(buff, &it, fileStat.st_size + 1);
 	if (height == 0) {
 		perror("Image size is incorrect\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);
 	}
 
 	if (buff[it] != '\n' && buff[it] != '#' && buff[it] != ' ' && buff[it] != '\t') {
 		perror("Error while reading image size\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);
 	}
 
 	if (buff[it] != '\n' && buff[it] != '#' && buff[it] != ' ' && buff[it] != '\t') {
 		perror("Error while reading image size\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);
 	}
 
 	int max_value = readInt(buff, &it, fileStat.st_size + 1);
 	if (max_value == 0 || max_value >= 65536) {
 		perror("Maximum color value is incorrect\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);	
 	}
 
 	if (buff[it] != '\n' && buff[it] != ' ' && buff[it] != '\t') {
 		perror("Error while reading image size\n");
+		free(signed_buff);
+		free(buff);
 		exit(1);
 	}
 
@@ -187,6 +204,7 @@ struct Image *readImage(const char *filename) {
 
 	close(fd);
 	free(buff);
+	free(signed_buff);
 	return image;
 }
 
