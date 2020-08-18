@@ -19,6 +19,15 @@ struct Image {
 	struct Pixel **matrix;
 };
 
+void freeImage(struct Image *image) {
+	int i;
+	for (i = 0; i < image->height; ++i) {
+		free(image->matrix[i]);
+	}
+	free(image->matrix);
+	free(image);
+}
+
 struct ThreadArgument
 {
 	struct Image *image, **result;
@@ -164,6 +173,9 @@ struct Image *readImage(const char *filename) {
 	while (it < fileStat.st_size + 1) {
 		if (buff[it] > max_value) {
 			perror("Image color element is more than maximim value\n");
+			free(signed_buff);
+			free(buff);
+			freeImage(image);
 			exit(1);
 		}
 
@@ -227,6 +239,7 @@ void writeImage(const char* filename, struct Image *image) {
 	fd = open(filename, O_WRONLY);
 	if (fd == -1) {
 		perror("Could not open file\n");
+		freeImage(image);
 		exit(1);
 	}
 
@@ -293,6 +306,7 @@ struct Image* convertToWB(struct Image *image) {
 		}
 	}
 
+	freeImage(image);
 	return result;
 }
 
@@ -325,6 +339,8 @@ struct Image *applySobel(struct Image *image, int threads) {
 
 	   if (pthread_create(&thr[i], NULL , applySobelOnThread, (void *)&args[i])) {
 	   		perror("Could not create thread\n");
+	   		freeImage(result);
+	   		freeImage(image);
 	   		exit(1);
 	   }
 	}
@@ -332,6 +348,8 @@ struct Image *applySobel(struct Image *image, int threads) {
 	for (i = 0; i < threads; ++i) {
 		if (pthread_join(thr[i], NULL)) {
 			perror("Error while running in thread\n");
+			freeImage(image);
+			freeImage(result);
 			exit(1);
 		}
 	}
@@ -346,6 +364,8 @@ struct Image *applySobel(struct Image *image, int threads) {
 	}
 
 	result->max_value = max_value;
+
+	freeImage(image);
 	return result;
 }
 
@@ -402,5 +422,7 @@ int main(int argc, char *argv[]) {
 	clock_t finish = clock();
 	printf("Time spent to aaply Sobel operator using %d thread(s) is %f seconds\n", atoi(argv[3]), (double)(finish - start) / CLOCKS_PER_SEC);
 	writeImage(argv[2], image);
+
+	freeImage(image);
 	return 0;
 }
